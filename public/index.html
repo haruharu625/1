@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#151619">
+  <title>FRAME — 動画編集スタジオ</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" type="module"></script>
+</head>
+<body>
+  <div id="app-startup-status" class="startup-status" role="status">編集画面を準備しています。この表示が消えない場合は、ページを再読み込みしてください。保存した HTML ファイルではなく、アプリの画面を開いてください。</div>
+  <noscript><div class="startup-status" role="alert">編集するには、ブラウザの設定で JavaScript を有効にしてください。</div></noscript>
+  <script>
+    if (location.protocol === 'file:') {
+      const notice = document.getElementById('app-startup-status');
+      notice.textContent = 'HTML ファイルだけでは FRAME は起動しません。Windows 用 ZIP を「すべて展開」し、初回は SETUP-WINDOWS.cmd、その後は START-FRAME.cmd を開いてください。起動後に開くブラウザの画面で動画を選択できます。';
+      notice.setAttribute('role', 'alert');
+    }
+  </script>
+  <header class="app-header">
+    <a class="brand" href="/" aria-label="FRAME ホーム"><span class="brand-symbol">f.</span><span>FRAME<span class="brand-sub">STUDIO</span></span></a>
+    <div class="project-heading"><span class="project-marker"></span><input id="project-name" aria-label="プロジェクト名" value="はじめてのムービー" maxlength="80"><span class="project-badge">プロジェクト</span></div>
+    <button class="button accent export-trigger" id="export-button" disabled><span data-icon="download"></span>書き出す<span class="button-tag">MP4</span></button>
+  </header>
+
+  <div class="workspace">
+    <nav class="tool-rail" aria-label="編集ツール">
+      <button class="rail-button active" id="media-tab" aria-pressed="true"><span data-icon="layers"></span><span>メディア</span></button>
+      <button class="rail-button" id="text-tab" aria-pressed="false"><span data-icon="type"></span><span>テキスト</span></button>
+      <div class="rail-spacer"></div>
+      <button class="rail-button" id="help-button"><span data-icon="help"></span><span>使い方</span></button>
+    </nav>
+
+    <aside class="library panel" aria-label="素材ライブラリ">
+      <section id="media-panel">
+        <div class="panel-heading"><h2>メディア</h2><span class="count" id="media-count">0</span></div>
+        <p class="panel-description">あなたの素材から、物語を。</p>
+        <label class="button upload-button file-picker" id="library-upload" aria-disabled="true"><span data-icon="plus"></span>動画を追加<input id="library-upload-input" class="video-file-input" type="file" accept="video/*,.mkv,.mov,.avi,.mp4,.webm" multiple aria-label="動画を追加" disabled></label>
+        <div id="upload-status" class="upload-status" role="status" hidden></div>
+        <div class="media-library" id="media-library">
+          <div class="library-empty"><span data-icon="film"></span><p>まだ素材がありません</p><span>MP4・MOV・WebM など<br>1ファイル最大 500MB</span></div>
+        </div>
+      </section>
+      <section id="text-panel" hidden>
+        <div class="panel-heading"><h2>テキスト</h2><span class="count" id="text-count">0</span></div>
+        <p class="panel-description">伝えたいことを、言葉に。</p>
+        <button class="button upload-button" id="add-text"><span data-icon="plus"></span>字幕を追加</button>
+        <div class="text-list" id="text-list"></div>
+        <div class="text-guide"><span data-icon="type"></span><p>字幕は画面の下中央に表示。<br>表示する時間を自由に設定できます。</p></div>
+      </section>
+      <div class="library-foot"><span class="status-dot"></span>自分のペースで、クリエイティブに。</div>
+    </aside>
+
+    <main class="editor-main">
+      <section class="preview-section" aria-label="動画プレビュー" id="drop-zone">
+        <div class="preview-heading"><div><span class="eyebrow">YOUR CREATIVE SPACE</span><h1>プレビュー</h1></div><span class="canvas-badge" id="canvas-size">動画未選択</span></div>
+        <div class="preview-stage" id="preview-stage">
+          <div class="empty-preview" id="empty-preview">
+            <div class="illustration" aria-hidden="true"><div class="decor-orbit"></div><div class="decor-card decor-back"></div><div class="decor-card decor-front"><span class="decor-sun"></span><span class="decor-hill"></span><span class="decor-play">▶</span><span class="decor-card-label">YOUR NEXT STORY</span></div><span class="decor-spark">✦</span><span class="decor-dot"></span></div>
+            <span class="eyebrow welcome-label">MAKE SOMETHING YOU LOVE</span>
+            <h2>ひらめきを、一本の動画に。</h2>
+            <p>動画をドロップして、あなたのストーリーをはじめよう。</p>
+            <label class="button accent file-picker" id="main-upload" aria-disabled="true"><span data-icon="plus"></span>動画を選択<input id="file-input" class="video-file-input" type="file" accept="video/*,.mkv,.mov,.avi,.mp4,.webm" multiple aria-label="動画を選択" disabled></label>
+            <span class="empty-hint">カット / 音量調整 / 字幕 / 動画の結合</span>
+          </div>
+          <div class="video-wrap" id="video-wrap" hidden><video id="preview-video" playsinline preload="metadata"></video><div id="caption-overlay" class="caption-overlay" aria-hidden="true"></div></div>
+          <div class="drop-overlay" id="drop-overlay" hidden><span data-icon="upload"></span>ここに動画をドロップ</div>
+        </div>
+        <div class="transport"><div class="transport-left"><span class="status-dot"></span><span id="preview-status">編集の準備ができています</span></div><div class="play-controls"><button class="icon-button" id="go-start" aria-label="先頭に戻る" disabled><span data-icon="skip"></span></button><button class="play-button" id="play-button" aria-label="再生" disabled><span data-icon="play"></span></button><button class="icon-button" id="go-end" aria-label="末尾へ移動" disabled><span data-icon="skip" class="flip"></span></button></div><div class="time-display"><span id="current-time">00:00.0</span><span class="time-separator">/</span><span id="total-time">00:00.0</span></div></div>
+      </section>
+
+      <section class="timeline-section" aria-label="タイムライン">
+        <div class="timeline-toolbar"><div class="timeline-title"><span data-icon="timeline"></span><h2>タイムライン</h2><span class="count" id="clip-count">0</span></div><div class="timeline-actions"><label class="text-button file-picker" id="timeline-add" aria-disabled="true"><span data-icon="plus"></span>動画を追加<input id="timeline-add-input" class="video-file-input" type="file" accept="video/*,.mkv,.mov,.avi,.mp4,.webm" multiple aria-label="動画を追加" disabled></label><span class="toolbar-divider"></span><label class="zoom-label"><span data-icon="zoom"></span><input type="range" id="timeline-zoom" aria-label="タイムラインの拡大率" min="1" max="4" step="0.25" value="1"></label></div></div>
+        <div class="timeline-scroll" id="timeline-scroll"><div class="timeline-content" id="timeline-content"><div class="ruler" id="ruler"><span>00:00</span><span>00:05</span><span>00:10</span><span>00:15</span><span>00:20</span></div><div class="track-row"><div class="track-label"><span data-icon="film"></span><span>動画</span></div><div class="video-track" id="video-track"><label class="track-placeholder file-picker" id="empty-timeline" aria-disabled="true"><span data-icon="plus"></span>動画を追加して編集をスタート<input class="video-file-input" type="file" accept="video/*,.mkv,.mov,.avi,.mp4,.webm" multiple aria-label="タイムラインに動画を追加" disabled></label></div></div><div class="track-row text-track-row"><div class="track-label"><span data-icon="type"></span><span>字幕</span></div><div class="subtitle-track" id="subtitle-track"><span class="track-hint">言葉を添えて、もっと伝わる動画に</span></div></div></div></div>
+        <div class="timeline-bottom"><span><span class="keyboard-key">Space</span> 再生 / 一時停止</span><span id="timeline-summary">素材を追加すると、ここに表示されます</span></div>
+      </section>
+    </main>
+
+    <aside class="inspector panel" aria-label="編集設定">
+      <div class="panel-heading"><h2 id="inspector-heading">クリップの編集</h2><span data-icon="sliders"></span></div>
+      <div id="inspector-empty" class="inspector-empty"><span data-icon="sliders"></span><h3>ここから、思いのままに。</h3><p>タイムラインの動画や字幕を選ぶと<br>編集オプションが表示されます。</p><div class="feature-note"><span>01</span>使いたい部分をカット</div><div class="feature-note"><span>02</span>音量をちょうどよく</div><div class="feature-note"><span>03</span>言葉を添えて完成</div></div>
+      <div id="clip-inspector" hidden>
+        <div class="selected-file"><span data-icon="film"></span><div><strong id="selected-name"></strong><span id="selected-info"></span></div></div>
+        <div class="setting-section"><div class="setting-heading"><h3>カット</h3><span id="cut-duration" class="green-label"></span></div><p class="setting-hint">動画の開始・終了位置を調整</p><div class="time-inputs"><label>開始 <span>秒</span><input id="trim-start" type="number" min="0" step="0.1" value="0"></label><label>終了 <span>秒</span><input id="trim-end" type="number" min="0.1" step="0.1" value="0"></label></div><div class="range-setting"><label for="start-range">開始位置</label><input id="start-range" type="range" min="0" max="1" step="0.01" value="0"><label for="end-range">終了位置</label><input id="end-range" type="range" min="0" max="1" step="0.01" value="1"></div><button class="text-button reset-button" id="reset-trim"><span data-icon="reset"></span>カットをリセット</button></div>
+        <div class="setting-section"><div class="setting-heading"><h3>オーディオ</h3><span id="volume-value">100%</span></div><div class="volume-control"><button class="icon-button" id="mute-button" aria-label="ミュート"><span data-icon="volume"></span></button><input id="volume" aria-label="クリップの音量" type="range" min="0" max="100" value="100"></div><p class="setting-hint" id="audio-hint">選択したクリップの音量を調整します</p></div>
+        <div class="setting-section"><h3>クリップの並び順</h3><div class="reorder-buttons"><button class="button secondary" id="move-left"><span data-icon="left"></span>前へ</button><button class="button secondary" id="move-right">後へ<span data-icon="right"></span></button></div><button class="text-button danger remove-button" id="remove-clip"><span data-icon="trash"></span>クリップを削除</button></div>
+      </div>
+      <div id="text-inspector" hidden>
+        <div class="setting-section"><label class="field-label" for="caption-text">字幕のテキスト</label><textarea id="caption-text" rows="4" maxlength="200" placeholder="ここにテキストを入力"></textarea><div class="setting-hint text-counter" id="text-counter">0 / 200</div></div>
+        <div class="setting-section"><h3>表示する時間</h3><p class="setting-hint">動画全体の時間を指定します</p><div class="time-inputs"><label>開始 <span>秒</span><input id="caption-start" type="number" min="0" step="0.1"></label><label>終了 <span>秒</span><input id="caption-end" type="number" min="0.1" step="0.1"></label></div></div>
+        <div class="caption-style-preview">こんな風に表示されます</div><p class="setting-hint">白文字・背景付きで、動画の下中央に表示します。重なる字幕は改行して表示されます。</p><button class="text-button danger remove-button" id="remove-text"><span data-icon="trash"></span>字幕を削除</button>
+      </div>
+      <div class="inspector-foot"><span data-icon="spark"></span>小さな編集で、大きな違いを。</div>
+    </aside>
+  </div>
+
+  <div class="toast" id="toast" role="status" hidden></div>
+  <dialog id="export-dialog"><div class="dialog-top"><span class="eyebrow">READY TO SHARE</span><button class="icon-button" id="close-export" aria-label="閉じる"><span data-icon="close"></span></button></div><div class="dialog-icon"><span data-icon="download"></span></div><h2 id="export-title">動画を書き出す</h2><p id="export-description">クリップをひとつに。字幕も音量も、そのままに。</p><div class="export-details"><div><span>ファイル形式</span><strong>MP4 / H.264</strong></div><div><span>動画の長さ</span><strong id="export-duration"></strong></div><div><span>クリップ / 字幕</span><strong id="export-count"></strong></div></div><div id="export-progress-wrap" hidden><div class="export-progress"><span id="export-progress-bar"></span></div><p class="setting-hint" id="export-progress-label" role="status">準備中…</p></div><button class="button accent full-width" id="start-export"><span data-icon="download"></span>書き出しを開始</button><a class="button accent full-width" id="download-export" hidden download><span data-icon="download"></span>MP4 をダウンロード</a><p class="dialog-note">処理中はこのページを開いたままにしてください。</p></dialog>
+  <dialog id="help-dialog"><div class="dialog-top"><span class="eyebrow">A LITTLE GUIDE</span><button class="icon-button" id="close-help" aria-label="閉じる"><span data-icon="close"></span></button></div><h2>動画づくりを、もっと気軽に。</h2><ol class="help-steps"><li><strong>動画を追加</strong><p>素材を選ぶか、画面にドラッグ＆ドロップ。複数の動画もまとめて追加できます。</p></li><li><strong>好きな部分をつなぐ</strong><p>タイムラインでクリップを選び、開始・終了と音量を調整。「前へ」「後へ」で並べ替えます。</p></li><li><strong>言葉を添える</strong><p>テキストから字幕を追加し、動画全体に対する表示時間を指定します。</p></li><li><strong>MP4で書き出す</strong><p>右上の「書き出す」から、編集した動画をダウンロードできます。</p></li></ol><p class="help-footnote">動画はこのアプリのサーバーに一時保存されます。ページの再読み込みで編集内容は失われます。素材によってはプレビューできなくても書き出せる場合があります。</p></dialog>
+</body>
+</html>
