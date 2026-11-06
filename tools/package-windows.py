@@ -9,9 +9,9 @@ output = Path(sys.argv[1]) if len(sys.argv) > 1 else root.parent / 'FRAME-Window
 files = [
     'package.json', 'server.mjs', 'README.md', 'WINDOWS.md',
     'START-FRAME.cmd', 'SETUP-WINDOWS.cmd', 'tools/start-frame.mjs',
-    'public/index.html', 'public/app.js', 'public/styles.css',
+    'public/index.html', 'public/app.js', 'public/audio-editor.js', 'public/styles.css',
     'fonts/NotoSansCJK-Regular.ttc', 'fonts/LICENSE.txt',
-    'tests/editor.test.mjs', 'tests/file_picker_test.py',
+    'tests/editor.test.mjs', 'tests/audio.test.mjs', 'tests/file_picker_test.py', 'tests/preview_test.py', 'tests/audio_browser_test.py',
 ]
 intro = '''FRAME の起動方法（Windows）
 

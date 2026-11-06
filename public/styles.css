@@ -16,3 +16,47 @@
 .file-picker .video-file-input:disabled{cursor:wait}
 .file-picker:not([aria-disabled="true"]):hover{filter:brightness(1.1)}
 .startup-status{padding:12px 20px;background:#3c3320;border-bottom:1px solid #685738;color:#ffdf9e;font-size:12px;line-height:1.9}
+
+/* Give the preview a bounded canvas. Its absolutely positioned media cannot
+   enlarge that canvas when the ResizeObserver fits a frame into it. */
+.workspace{height:calc(100dvh - 78px);min-height:0}
+.editor-main{min-height:0;display:grid;grid-template-rows:minmax(0,1fr) auto}
+.preview-section{min-height:0;overflow:hidden}
+.preview-stage{min-height:0;min-width:0}
+.video-wrap{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);max-height:none;max-width:none;min-height:0}
+.video-wrap video{object-fit:contain;object-position:center;min-height:0;max-height:none}
+.inspector,.library{min-height:0;overflow-y:auto}
+.timeline-section{min-height:0;max-height:38dvh;overflow:auto}
+@media(max-width:900px){
+  .workspace{height:auto;min-height:calc(100dvh - 70px)}
+  .editor-main{height:calc(100dvh - 70px);min-height:540px}
+  .preview-section{min-height:0}
+  .inspector,.library{overflow-y:visible}
+}
+@media(max-width:620px){
+  .workspace{min-height:calc(100dvh - 65px)}
+  .editor-main{height:auto;min-height:0;display:flex}
+  .preview-section{flex:none;overflow:visible}
+  .preview-stage,.preview-stage:has(.video-wrap:not([hidden])){height:clamp(220px,45dvh,420px);min-height:0;flex:none}
+  .timeline-section{max-height:none}
+}
+
+.file-picker .audio-file-input{position:absolute;inset:0;width:100%;height:100%;opacity:0;cursor:pointer;font-size:16px}
+.file-picker .audio-file-input:disabled{cursor:not-allowed}
+.audio-library{display:grid;gap:9px;margin-top:18px}
+.audio-asset{width:100%;display:flex;gap:9px;align-items:center;background:#202c30;border:1px solid #36515a;border-radius:6px;padding:12px 10px;text-align:left;color:#b3d6de}
+.audio-asset:hover:not(:disabled){border-color:#8dd8df;background:#253b40}
+.audio-asset-icon{font-size:20px;color:#8dd8df}
+.audio-asset-info{min-width:0;flex:1}
+.audio-asset-info strong{font-size:10px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.audio-asset-info small{font-size:9px;color:#81a9b3;display:block;margin-top:5px}
+.audio-guide{margin-top:18px;line-height:1.9}
+.audio-offset-input{width:100%;background:#23252c;border:1px solid #393d46;border-radius:5px;color:#dfe1e7;padding:9px;font-family:ui-monospace,monospace;font-size:11px}
+.audio-track-row{min-height:33px}
+.audio-track{position:relative;flex:1;min-width:0;min-height:33px;background:#1b2427;border:1px dashed #30434a;border-radius:5px}
+.audio-track .track-hint{display:block;padding:9px}
+.audio-block{position:absolute;height:25px;min-width:8px;background:#2f5660;border:1px solid #5599a7;border-radius:3px;color:#cef1f5;padding:4px 6px;font-size:8px;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;text-align:left}
+.audio-block.selected{border-color:#b4f1fa;background:#427583}
+#audio-inspector .field-label{font-size:10px;line-height:1.7}
+@media(max-width:900px) and (min-width:621px){#audio-inspector:not([hidden]){display:grid;grid-template-columns:1fr 1fr;gap:0 25px}}
+@media(max-width:620px){.audio-library{display:flex;overflow-x:auto;clear:both;padding-top:14px;margin:0}.audio-asset{min-width:160px;width:160px}.audio-guide{margin-top:10px;font-size:9px}.audio-track .track-hint{font-size:8px}}

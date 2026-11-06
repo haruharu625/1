@@ -12,9 +12,11 @@ import { Transform } from 'node:stream';
 const publicRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
 const dataRoot = await mkdtemp(path.join(tmpdir(), 'frame-editor-'));
 const videos = new Map();
+const audios = new Map();
 const jobs = new Map();
 const children = new Set();
 const maxUpload = 500 * 1024 * 1024;
+const maxAudioUpload = 100 * 1024 * 1024;
 const maxStorage = 2 * 1024 * 1024 * 1024;
 const maxDuration = 4 * 60 * 60;
 const ttl = 6 * 60 * 60 * 1000;
@@ -25,6 +27,9 @@ const font = await (async () => {
   return null;
 })();
 const formats = 'mov,matroska,webm,avi,mpeg,mpegts,ogg,flv';
+const audioFormats = 'mp3,wav,mov,aac,ogg,flac,matroska,webm';
+const pendingUploads = { video: 0, audio: 0 };
+const storedBytes = () => [...videos.values(), ...audios.values()].reduce((sum, media) => sum + media.size, 0);
 let activeUploads = 0;
 let uploadingBytes = 0;
 let shuttingDown = false;
@@ -46,6 +51,9 @@ function json(res, status, body) {
 function publicVideo(video) {
   return { id: video.id, name: video.name, duration: video.duration, width: video.width, height: video.height,
     hasAudio: video.hasAudio, url: `/api/videos/${video.id}/media`, thumbnailUrl: `/api/videos/${video.id}/thumbnail` };
+}
+function publicAudio(audio) {
+  return { id: audio.id, name: audio.name, duration: audio.duration, url: `/api/audios/${audio.id}/media` };
 }
 function publicJob(job) {
   return { id: job.id, status: job.status, progress: job.progress, ...(job.error ? { error: job.error } : {}),
@@ -99,14 +107,19 @@ const ffmpeg = (args, options) => runProcess('ffmpeg', [
 ], options);
 const encoder = ['-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21', '-threads', '2', '-pix_fmt', 'yuv420p'];
 
-async function upload(req, res, url) {
+async function upload(req, res, url, kind = 'video') {
+  const isAudio = kind === 'audio';
+  const collection = isAudio ? audios : videos;
+  const assetLimit = isAudio ? 20 : 30;
+  const uploadLimit = isAudio ? maxAudioUpload : maxUpload;
+  const label = isAudio ? '音声' : '動画';
   if (activeUploads >= 2) fail(429, '読み込み処理中です。少し待ってから再試行してください。');
-  if (videos.size + activeUploads >= 30) fail(429, '素材は 30 個まで読み込めます。');
+  if (collection.size + pendingUploads[kind] >= assetLimit) fail(429, `${label}素材は ${assetLimit} 個まで読み込めます。`);
   const declared = Number(req.headers['content-length']);
-  if (Number.isFinite(declared) && declared > maxUpload) fail(413, '動画は 500 MB 以下にしてください。');
-  const reserved = [...videos.values()].reduce((sum, video) => sum + video.size, 0);
-  if (reserved + (declared || maxUpload) > maxStorage) fail(413, '素材の保存容量を超えました。アプリを再起動してから再試行してください。');
-  activeUploads++;
+  if (Number.isFinite(declared) && declared > uploadLimit) fail(413, `${label}は ${isAudio ? 100 : 500} MB 以下にしてください。`);
+  if (storedBytes() + uploadingBytes + (declared || uploadLimit) > maxStorage)
+    fail(413, '素材の保存容量を超えました。アプリを再起動してから再試行してください。');
+  activeUploads++; pendingUploads[kind]++;
   const id = randomUUID();
   const directory = path.join(dataRoot, id);
   const source = path.join(directory, 'source');
@@ -115,31 +128,52 @@ async function upload(req, res, url) {
   try {
     await mkdir(directory);
     const limiter = new Transform({ transform(chunk, encoding, callback) {
-      const stored = [...videos.values()].reduce((sum, video) => sum + video.size, 0);
-      if (size + chunk.length > maxUpload || stored + uploadingBytes + chunk.length > maxStorage) {
-        callback(new HttpError(413, '動画は 500 MB 以下、素材の合計は 2 GB 以下にしてください。'));
+      if (size + chunk.length > uploadLimit || storedBytes() + uploadingBytes + chunk.length > maxStorage) {
+        callback(new HttpError(413, `${label}は ${isAudio ? 100 : 500} MB 以下、素材の合計は 2 GB 以下にしてください。`));
       } else {
         size += chunk.length; uploadingBytes += chunk.length; callback(null, chunk);
       }
     } });
     // Do not destroy the request on a size error: retain the connection long enough to report it.
     req.pipe(limiter);
-    const abort = () => limiter.destroy(new HttpError(400, '動画の読み込みが中断されました。'));
+    const abort = () => limiter.destroy(new HttpError(400, `${label}の読み込みが中断されました。`));
     req.once('aborted', abort);
     req.once('error', abort);
     try { await pipeline(limiter, createWriteStream(source, { flags: 'wx' })); }
     finally { req.removeListener('aborted', abort); req.removeListener('error', abort); req.unpipe(limiter); }
-    if (!size) fail(400, '空の動画ファイルは読み込めません。');
+    if (!size) fail(400, `空の${label}ファイルは読み込めません。`);
     let metadata;
     try {
       metadata = JSON.parse(await runProcess('ffprobe', ['-v', 'error', '-protocol_whitelist', 'file,pipe',
-        '-format_whitelist', formats, '-show_format', '-show_streams', '-of', 'json', source], { timeout: 30_000 }));
-    } catch { fail(422, 'この動画を読み込めません。MP4、MOV、WebM などの動画を選んでください。'); }
-    const stream = metadata.streams?.find(item => item.codec_type === 'video' && !item.disposition?.attached_pic);
+        '-format_whitelist', isAudio ? audioFormats : formats, '-show_format', '-show_streams', '-of', 'json', source], { timeout: 30_000 }));
+    } catch {
+      fail(422, isAudio ? 'この音声を読み込めません。MP3、WAV、M4A などの音声ファイルを選んでください。'
+        : 'この動画を読み込めません。MP4、MOV、WebM などの動画を選んでください。');
+    }
+    const streams = Array.isArray(metadata.streams) ? metadata.streams : [];
+    const stream = streams.find(item => isAudio ? item.codec_type === 'audio' : item.codec_type === 'video' && !item.disposition?.attached_pic);
     const duration = Number(metadata.format?.duration || stream?.duration);
-    if (!stream || !Number.isFinite(duration) || duration <= 0 || duration > maxDuration ||
-      !Number.isInteger(stream.width) || !Number.isInteger(stream.height) || stream.width < 2 || stream.height < 2 ||
-      stream.width > 8192 || stream.height > 8192) fail(422, '対応していない動画です。4 時間以内・8192 px 以下の動画を選んでください。');
+    if (!stream || !Number.isFinite(duration) || duration <= 0 || duration > maxDuration)
+      fail(422, `対応していない${label}です。4 時間以内の${label}ファイルを選んでください。`);
+    const formatNames = String(metadata.format?.format_name || '').split(',');
+    if (isAudio) {
+      if (streams.some(item => item.codec_type === 'video' && !item.disposition?.attached_pic))
+        fail(422, '動画ファイルは「動画を追加」から読み込んでください。音声ファイルを選んでください。');
+      const sourceMime = formatNames.includes('mp3') ? 'audio/mpeg'
+        : formatNames.includes('wav') ? 'audio/wav'
+        : formatNames.includes('aac') ? 'audio/aac'
+        : formatNames.includes('ogg') ? 'audio/ogg'
+        : formatNames.includes('flac') ? 'audio/flac'
+        : formatNames.includes('matroska') ? (['opus', 'vorbis'].includes(stream.codec_name) ? 'audio/webm' : 'audio/x-matroska')
+        : 'audio/mp4';
+      const audio = { id, name: safeName(url.searchParams.get('name') || 'audio'), duration,
+        source, directory, sourceMime, size, touched: Date.now() };
+      audios.set(id, audio); accepted = true;
+      json(res, 201, publicAudio(audio));
+      return;
+    }
+    if (!Number.isInteger(stream.width) || !Number.isInteger(stream.height) || stream.width < 2 || stream.height < 2 ||
+      stream.width > 8192 || stream.height > 8192) fail(422, '対応していない動画です。8192 px 以下の動画を選んでください。');
     let width = stream.width; let height = stream.height;
     const rotation = Number(stream.side_data_list?.find(item => item.rotation !== undefined)?.rotation || stream.tags?.rotate || 0);
     if (Math.abs(rotation) % 180 === 90) [width, height] = [height, width];
@@ -148,7 +182,6 @@ async function upload(req, res, url) {
       await ffmpeg(['-protocol_whitelist', 'file,pipe', '-format_whitelist', formats, '-ss', String(Math.min(duration / 4, 1)),
         '-i', source, '-map', '0:v:0', '-frames:v', '1', '-vf', 'scale=480:-2', '-threads', '2', thumbnail], { timeout: 30_000 });
     } catch { fail(422, '動画のプレビューを作成できませんでした。別の動画を選んでください。'); }
-    const formatNames = metadata.format.format_name.split(',');
     const sourceMime = formatNames.includes('matroska')
       ? (['vp8', 'vp9', 'av1'].includes(stream.codec_name) ? 'video/webm' : 'video/x-matroska')
       : formatNames.includes('ogg') ? 'video/ogg'
@@ -157,11 +190,11 @@ async function upload(req, res, url) {
       : formatNames.includes('mpeg') ? 'video/mpeg'
       : formatNames.includes('flv') ? 'video/x-flv' : 'video/mp4';
     const video = { id, name: safeName(url.searchParams.get('name')), duration, width, height, sourceMime,
-      hasAudio: metadata.streams.some(item => item.codec_type === 'audio'), source, directory, thumbnail, size, touched: Date.now() };
+      hasAudio: streams.some(item => item.codec_type === 'audio'), source, directory, thumbnail, size, touched: Date.now() };
     videos.set(id, video); accepted = true;
     json(res, 201, publicVideo(video));
   } finally {
-    activeUploads--; uploadingBytes -= size;
+    activeUploads--; pendingUploads[kind]--; uploadingBytes -= size;
     if (!accepted) await rm(directory, { recursive: true, force: true });
   }
 }
@@ -191,7 +224,20 @@ function validateEdit(body) {
       fail(400, 'テキストは 200 文字以内、表示時間は動画の範囲内で指定してください。');
     return { text: caption.text, start: caption.start, end: Math.min(caption.end, duration) };
   });
-  return { clips, texts, duration };
+  const requestedAudio = body.audioTracks ?? [];
+  if (!Array.isArray(requestedAudio) || requestedAudio.length > 8) fail(400, '追加する音声は 8 トラックまでです。');
+  const audioTracks = requestedAudio.map(track => {
+    const audio = audios.get(track?.audioId);
+    if (!audio) fail(404, '音声素材が見つかりません。再度読み込んでください。');
+    const { start, end, offset } = track;
+    const volume = track.volume ?? 1;
+    if (!finite(start) || !finite(end) || start < 0 || start >= audio.duration || end <= start || end > audio.duration + 0.001)
+      fail(400, '音声のカット範囲を素材の長さに合わせて指定してください。');
+    if (!finite(offset) || offset < 0 || offset >= duration) fail(400, '音声の開始位置は動画の範囲内で指定してください。');
+    if (!finite(volume) || volume < 0 || volume > 1) fail(400, '音声の音量は 0〜1 の範囲で指定してください。');
+    return { audio, start, end: Math.min(end, audio.duration), offset, volume };
+  });
+  return { clips, texts, audioTracks, duration };
 }
 
 async function renderJob(job, edit) {
@@ -204,7 +250,8 @@ async function renderJob(job, edit) {
     const width = Math.max(2, Math.floor(first.width * factor / 2) * 2);
     const height = Math.max(2, Math.floor(first.height * factor / 2) * 2);
     let done = 0;
-    const normalizeWeight = edit.texts.length ? 65 : 95;
+    const needsFinalPass = edit.texts.length > 0 || edit.audioTracks.length > 0;
+    const normalizeWeight = needsFinalPass ? 65 : 95;
     const outputs = [];
     for (let index = 0; index < edit.clips.length; index++) {
       const clip = edit.clips[index];
@@ -223,14 +270,14 @@ async function renderJob(job, edit) {
     }
     const list = path.join(directory, 'concat.txt');
     await writeFile(list, outputs.map((output, index) => `file 'clip-${index}.mp4'`).join('\n'));
-    const combined = path.join(directory, edit.texts.length ? 'combined.mp4' : 'output.mp4');
+    const combined = path.join(directory, needsFinalPass ? 'combined.mp4' : 'output.mp4');
     await ffmpeg(['-f', 'concat', '-safe', '1', '-i', list, '-map', '0:v:0', '-map', '0:a:0', '-c', 'copy', '-movflags', '+faststart', combined], {
-      duration: edit.duration, onProgress: part => { job.progress = normalizeWeight + Math.round(part * (edit.texts.length ? 3 : 4)); },
+      duration: edit.duration, onProgress: part => { job.progress = normalizeWeight + Math.round(part * (needsFinalPass ? 3 : 4)); },
     });
-    if (edit.texts.length) {
+    if (needsFinalPass) {
       // Relative filter paths avoid Windows drive-colon/backslash escaping and
       // work under user directories containing spaces, apostrophes or Japanese.
-      await copyFile(font, path.join(directory, 'font.ttc'));
+      if (edit.texts.length) await copyFile(font, path.join(directory, 'font.ttc'));
       const filters = [];
       for (let index = 0; index < edit.texts.length; index++) {
         const text = edit.texts[index];
@@ -248,16 +295,39 @@ async function renderJob(job, edit) {
         filters.push(`drawtext=fontfile=font.ttc:textfile=text-${index}.txt:expansion=none:fontsize=${fontSize}:fontcolor=white:box=1:boxcolor=black@0.65:boxborderw=10:x=(w-text_w)/2:y='${y}':enable='gte(t,${text.start})*lt(t,${text.end})'`);
       }
       const output = path.join(directory, 'output.mp4');
-      await ffmpeg(['-i', combined, '-map', '0:v:0', '-map', '0:a:0', '-vf', filters.join(','), ...encoder,
-        '-c:a', 'copy', '-movflags', '+faststart', output], {
-          cwd: directory, duration: edit.duration, onProgress: part => { job.progress = Math.min(99, 68 + Math.round(part * 31)); },
-        });
+      const finalArgs = ['-i', combined];
+      const audioFilters = [];
+      if (edit.audioTracks.length) {
+        audioFilters.push(`[0:a:0]aresample=48000:async=1:first_pts=0,apad=whole_dur=${edit.duration},atrim=duration=${edit.duration},asetpts=PTS-STARTPTS[original]`);
+        for (let index = 0; index < edit.audioTracks.length; index++) {
+          const track = edit.audioTracks[index];
+          const segmentDuration = Math.min(track.end - track.start, edit.duration - track.offset);
+          finalArgs.push('-ss', String(track.start), '-t', String(segmentDuration), '-protocol_whitelist', 'file,pipe',
+            '-format_whitelist', audioFormats, '-i', track.audio.source);
+          const delaySamples = Math.round(track.offset * 48000);
+          audioFilters.push(`[${index + 1}:a:0]atrim=duration=${segmentDuration},asetpts=PTS-STARTPTS,aresample=48000:async=1:first_pts=0,aformat=sample_fmts=fltp:channel_layouts=stereo,volume=${track.volume},adelay=${delaySamples}S:all=1[bgm${index}]`);
+        }
+        const inputs = '[original]' + edit.audioTracks.map((track, index) => `[bgm${index}]`).join('');
+        // Keep the original audio level. The limiter prevents summed tracks from
+        // clipping without amix's default normalization quieting every track.
+        audioFilters.push(`${inputs}amix=inputs=${edit.audioTracks.length + 1}:duration=first:dropout_transition=0:normalize=0,alimiter=limit=0.95:level=0:latency=1,apad=whole_dur=${edit.duration},atrim=duration=${edit.duration}[mixed]`);
+        finalArgs.push('-filter_complex', audioFilters.join(';'));
+      }
+      finalArgs.push('-map', '0:v:0', '-map', edit.audioTracks.length ? '[mixed]' : '0:a:0');
+      if (filters.length) finalArgs.push('-vf', filters.join(','), ...encoder);
+      else finalArgs.push('-c:v', 'copy');
+      if (edit.audioTracks.length) finalArgs.push('-c:a', 'aac', '-b:a', '192k', '-ar', '48000', '-ac', '2', '-threads', '2');
+      else finalArgs.push('-c:a', 'copy');
+      finalArgs.push('-t', String(edit.duration), '-map_metadata', '-1', '-movflags', '+faststart', output);
+      await ffmpeg(finalArgs, {
+        cwd: directory, duration: edit.duration, onProgress: part => { job.progress = Math.min(99, 68 + Math.round(part * 31)); },
+      });
     }
     job.output = path.join(directory, 'output.mp4');
     job.progress = 100; job.status = 'completed';
     // Retain only the final artifact; intermediate media can be large.
     for (const output of outputs) await rm(output, { force: true }).catch(() => {});
-    if (edit.texts.length) {
+    if (needsFinalPass) {
       await rm(combined, { force: true }).catch(() => {});
       await rm(path.join(directory, 'font.ttc'), { force: true }).catch(() => {});
     }
@@ -273,13 +343,14 @@ async function exportVideo(req, res, videoId) {
   if (activeExports() >= 2) fail(429, '他の動画を書き出し中です。完了してから再試行してください。');
   if (jobs.size >= 30) fail(429, '書き出し履歴が上限に達しました。アプリを再起動してください。');
   let body = await readJson(req);
-  if (videoId) body = { clips: [{ videoId, start: body?.start, end: body?.end, volume: body?.volume }], texts: body?.texts };
+  if (videoId) body = { clips: [{ videoId, start: body?.start, end: body?.end, volume: body?.volume }], texts: body?.texts, audioTracks: body?.audioTracks };
   const edit = validateEdit(body);
   // Recheck after reading the request so concurrent callers cannot bypass the bound.
   if (activeExports() >= 2) fail(429, '他の動画を書き出し中です。完了してから再試行してください。');
   const job = { id: randomUUID(), status: 'processing', progress: 0, duration: edit.duration,
-    videoIds: edit.clips.map(clip => clip.video.id), touched: Date.now() };
+    videoIds: edit.clips.map(clip => clip.video.id), audioIds: edit.audioTracks.map(track => track.audio.id), touched: Date.now() };
   for (const clip of edit.clips) clip.video.touched = Date.now();
+  for (const track of edit.audioTracks) track.audio.touched = Date.now();
   jobs.set(job.id, job);
   json(res, 202, publicJob(job));
   void renderJob(job, edit);
@@ -326,6 +397,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'GET' && url.pathname === '/api/health') { json(res, 200, { ok: true }); return; }
     if (req.method === 'POST' && url.pathname === '/api/videos') { await upload(req, res, url); return; }
+    if (req.method === 'POST' && url.pathname === '/api/audios') { await upload(req, res, url, 'audio'); return; }
     if (req.method === 'POST' && url.pathname === '/api/exports') { await exportVideo(req, res); return; }
     const videoMatch = /^\/api\/videos\/([a-f0-9-]{36})\/(media|thumbnail|exports)$/.exec(url.pathname);
     if (videoMatch) {
@@ -337,6 +409,13 @@ const server = http.createServer(async (req, res) => {
         await sendFile(req, res, videoMatch[2] === 'thumbnail' ? video.thumbnail : video.source,
           videoMatch[2] === 'thumbnail' ? 'image/jpeg' : video.sourceMime); return;
       }
+    }
+    const audioMatch = /^\/api\/audios\/([a-f0-9-]{36})\/media$/.exec(url.pathname);
+    if (audioMatch && ['GET', 'HEAD'].includes(req.method)) {
+      const audio = audios.get(audioMatch[1]);
+      if (!audio) fail(404, '音声素材が見つかりません。再度読み込んでください。');
+      audio.touched = Date.now();
+      await sendFile(req, res, audio.source, audio.sourceMime); return;
     }
     const exportMatch = /^\/api\/exports\/([a-f0-9-]{36})(\/download)?$/.exec(url.pathname);
     if (exportMatch && ['GET', 'HEAD'].includes(req.method)) {
@@ -372,9 +451,14 @@ const cleanupTimer = setInterval(async () => {
   for (const [id, job] of jobs) if (job.status !== 'processing' && now - job.touched > ttl) {
     jobs.delete(id); await rm(job.directory, { recursive: true, force: true }).catch(() => {});
   }
-  const inUse = new Set([...jobs.values()].filter(job => job.status === 'processing').flatMap(job => job.videoIds));
+  const processing = [...jobs.values()].filter(job => job.status === 'processing');
+  const inUse = new Set(processing.flatMap(job => job.videoIds));
+  const audioInUse = new Set(processing.flatMap(job => job.audioIds));
   for (const [id, video] of videos) if (!inUse.has(id) && now - video.touched > ttl) {
     videos.delete(id); await rm(video.directory, { recursive: true, force: true }).catch(() => {});
+  }
+  for (const [id, audio] of audios) if (!audioInUse.has(id) && now - audio.touched > ttl) {
+    audios.delete(id); await rm(audio.directory, { recursive: true, force: true }).catch(() => {});
   }
 }, 5 * 60 * 1000);
 cleanupTimer.unref();
